@@ -7,6 +7,7 @@ import (
 
 func main() {
 	servMux := http.NewServeMux()
+	servMux.Handle("/", http.FileServer(http.Dir(".")))
 	servStruct := http.Server{
 		Addr:    ":8081",
 		Handler: servMux,
