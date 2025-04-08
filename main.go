@@ -7,10 +7,10 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/joho/godotenv"
-
 	"github.com/CookieBorn/chirpy/internal/database"
 	healpers "github.com/CookieBorn/chirpy/internal/helpers"
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 
 	_ "github.com/lib/pq"
 )
@@ -26,7 +26,7 @@ func main() {
 	servMux.HandleFunc("GET /api/healthz", ReadinessHandeler)
 	servMux.HandleFunc("GET /admin/metrics", apiC.metricHandle)
 	servMux.HandleFunc("POST /admin/reset", apiC.metricReset)
-	servMux.HandleFunc("POST /api/validate_chirp", postHandle)
+	servMux.HandleFunc("POST /api/chirps", apiC.postHandle)
 	servMux.HandleFunc("POST /api/users", apiC.createUserHandle)
 	http.StripPrefix("app/", servMux)
 	servStruct := http.Server{
@@ -88,9 +88,10 @@ func (cfg *ApiConfig) metricReset(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func postHandle(res http.ResponseWriter, req *http.Request) {
+func (cfg *ApiConfig) postHandle(res http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
+		Body    string    `json:"body"`
+		User_id uuid.UUID `json:"user_id"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
@@ -104,11 +105,23 @@ func postHandle(res http.ResponseWriter, req *http.Request) {
 		healpers.RespondWithError(res, 400, "Chirpy is too long")
 	}
 	clean := healpers.StringCleaner(params.Body)
-	valid := healpers.ValidRet{
-		Valid:        true,
-		Cleaned_body: clean,
+	chirpsParam := database.CreateChirpParams{
+		Body:   clean,
+		UserID: params.User_id,
 	}
-	healpers.RespondWithJSON(res, 200, valid)
+	chirp, err := cfg.DB.CreateChirp(req.Context(), chirpsParam)
+	if err != nil {
+		fmt.Printf("Create Error: %v", err)
+		return
+	}
+	jsonChirp := healpers.Chirp{
+		Id:         chirp.ID,
+		Created_at: chirp.CreatedAt,
+		Updated_at: chirp.UpdatedAt,
+		Body:       chirp.Body,
+		User_id:    chirp.UserID,
+	}
+	healpers.RespondWithJSON(res, 201, jsonChirp)
 }
 
 func (cfg *ApiConfig) createUserHandle(res http.ResponseWriter, req *http.Request) {
