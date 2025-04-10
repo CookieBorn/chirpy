@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 
 	"github.com/CookieBorn/chirpy/internal/database"
@@ -28,6 +29,8 @@ func main() {
 	servMux.HandleFunc("POST /admin/reset", apiC.metricReset)
 	servMux.HandleFunc("POST /api/chirps", apiC.postHandle)
 	servMux.HandleFunc("POST /api/users", apiC.createUserHandle)
+	servMux.HandleFunc("GET /api/chirps", apiC.getChirpsHandle)
+	servMux.HandleFunc("GET /api/chirps/", apiC.getChirpHandle)
 	http.StripPrefix("app/", servMux)
 	servStruct := http.Server{
 		Addr:    ":8081",
@@ -145,4 +148,48 @@ func (cfg *ApiConfig) createUserHandle(res http.ResponseWriter, req *http.Reques
 		Email:      usr.Email,
 	}
 	healpers.RespondWithJSON(res, 201, UserStruct)
+}
+
+func (cfg *ApiConfig) getChirpsHandle(res http.ResponseWriter, req *http.Request) {
+	chirps, err := cfg.DB.GetChirpsAll(req.Context())
+	if err != nil {
+		healpers.RespondWithError(res, 400, fmt.Sprintf("Get chirps failed: %v", err))
+	}
+	jsonChirps := healpers.Chirps{}
+	for _, chirp := range chirps {
+		jsonChirp := healpers.Chirp{
+			Id:         chirp.ID,
+			Created_at: chirp.CreatedAt,
+			Updated_at: chirp.UpdatedAt,
+			Body:       chirp.Body,
+			User_id:    chirp.UserID,
+		}
+		jsonChirps = append(jsonChirps, jsonChirp)
+	}
+	healpers.RespondWithJSON(res, 200, jsonChirps)
+}
+
+func (cfg *ApiConfig) getChirpHandle(res http.ResponseWriter, req *http.Request) {
+	elements := strings.Split(req.RequestURI, "/")
+	fmt.Printf("%v", elements[3])
+	idP, err := uuid.Parse(elements[3])
+	if err != nil {
+		fmt.Printf("Parse error: %v\n", err)
+		healpers.RespondWithError(res, 404, "User not found")
+		return
+	}
+	chirp, err := cfg.DB.GetChirp(req.Context(), idP)
+	if err != nil {
+		fmt.Printf("Get chirp error: %v\n", err)
+		healpers.RespondWithError(res, 404, "User not found")
+		return
+	}
+	jsonChirp := healpers.Chirp{
+		Id:         chirp.ID,
+		Created_at: chirp.CreatedAt,
+		Updated_at: chirp.UpdatedAt,
+		Body:       chirp.Body,
+		User_id:    chirp.UserID,
+	}
+	healpers.RespondWithJSON(res, 200, jsonChirp)
 }
