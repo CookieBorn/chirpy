@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/CookieBorn/chirpy/internal/auth"
 	"github.com/CookieBorn/chirpy/internal/database"
 	healpers "github.com/CookieBorn/chirpy/internal/helpers"
 	"github.com/google/uuid"
@@ -31,6 +32,7 @@ func main() {
 	servMux.HandleFunc("POST /api/users", apiC.createUserHandle)
 	servMux.HandleFunc("GET /api/chirps", apiC.getChirpsHandle)
 	servMux.HandleFunc("GET /api/chirps/", apiC.getChirpHandle)
+	servMux.HandleFunc("POST /api/login", apiC.postLoginHandle)
 	http.StripPrefix("app/", servMux)
 	servStruct := http.Server{
 		Addr:    ":8081",
@@ -129,7 +131,8 @@ func (cfg *ApiConfig) postHandle(res http.ResponseWriter, req *http.Request) {
 
 func (cfg *ApiConfig) createUserHandle(res http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
@@ -139,8 +142,17 @@ func (cfg *ApiConfig) createUserHandle(res http.ResponseWriter, req *http.Reques
 		res.WriteHeader(400)
 		return
 	}
-
-	usr, err := cfg.DB.CreateUser(req.Context(), params.Email)
+	passw, err := auth.HashPassword(params.Password)
+	if err != nil {
+		fmt.Printf("Password hash error: %v", err)
+		res.WriteHeader(400)
+		return
+	}
+	userParam := database.CreateUserParams{
+		Email:    params.Email,
+		Password: passw,
+	}
+	usr, err := cfg.DB.CreateUser(req.Context(), userParam)
 	UserStruct := healpers.User{
 		Id:         usr.ID,
 		Created_at: usr.CreatedAt,
@@ -192,4 +204,37 @@ func (cfg *ApiConfig) getChirpHandle(res http.ResponseWriter, req *http.Request)
 		User_id:    chirp.UserID,
 	}
 	healpers.RespondWithJSON(res, 200, jsonChirp)
+}
+
+func (cfg *ApiConfig) postLoginHandle(res http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		fmt.Printf("Decoding error: %v", err)
+		healpers.RespondWithError(res, 400, "Decoding Error")
+		return
+	}
+	usr, err := cfg.DB.GetUserEmail(req.Context(), params.Email)
+	if err != nil {
+		fmt.Printf("User error: %v", err)
+		healpers.RespondWithError(res, 400, "User Does Not Exist")
+		return
+	}
+	err = auth.CheckPasswordHash(usr.Password, params.Password)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	userJson := healpers.User{
+		Id:         usr.ID,
+		Created_at: usr.CreatedAt,
+		Updated_at: usr.UpdatedAt,
+		Email:      usr.Email,
+	}
+	healpers.RespondWithJSON(res, 200, userJson)
 }
