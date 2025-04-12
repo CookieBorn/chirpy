@@ -44,6 +44,7 @@ type User struct {
 	Created_at time.Time `json:"created_at"`
 	Updated_at time.Time `json:"updated_at"`
 	Email      string    `json:"email"`
+	Token      string    `json:"token"`
 }
 
 func StringCleaner(s string) string {
@@ -57,9 +58,14 @@ func StringCleaner(s string) string {
 	return string
 }
 
-func DatabaseConnection() *database.Queries {
+func GetEnv(Title string) string {
 	godotenv.Load(".env")
-	dbURL := os.Getenv("DB_URL")
+	dbURL := os.Getenv(Title)
+	return dbURL
+}
+
+func DatabaseConnection() *database.Queries {
+	dbURL := GetEnv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Printf("Open connection error: %v", err)

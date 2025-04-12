@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/CookieBorn/chirpy/internal/auth"
 	"github.com/CookieBorn/chirpy/internal/database"
@@ -20,7 +22,8 @@ import (
 func main() {
 	dbQueries := healpers.DatabaseConnection()
 	apiC := ApiConfig{
-		DB: dbQueries,
+		DB:        dbQueries,
+		JWTSecret: healpers.GetEnv("JWT_SECRET"),
 	}
 	apiC.FileserverHits.Store(0)
 	servMux := http.NewServeMux()
@@ -57,6 +60,7 @@ func ReadinessHandeler(res http.ResponseWriter, req *http.Request) {
 type ApiConfig struct {
 	FileserverHits atomic.Int32
 	DB             *database.Queries
+	JWTSecret      string
 }
 
 func (cfg *ApiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -106,13 +110,23 @@ func (cfg *ApiConfig) postHandle(res http.ResponseWriter, req *http.Request) {
 		res.WriteHeader(400)
 		return
 	}
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	usr, err := auth.ValidateJWT(token, cfg.JWTSecret)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
 	if len([]rune(params.Body)) > 140 {
 		healpers.RespondWithError(res, 400, "Chirpy is too long")
 	}
 	clean := healpers.StringCleaner(params.Body)
 	chirpsParam := database.CreateChirpParams{
 		Body:   clean,
-		UserID: params.User_id,
+		UserID: usr,
 	}
 	chirp, err := cfg.DB.CreateChirp(req.Context(), chirpsParam)
 	if err != nil {
@@ -208,8 +222,9 @@ func (cfg *ApiConfig) getChirpHandle(res http.ResponseWriter, req *http.Request)
 
 func (cfg *ApiConfig) postLoginHandle(res http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email              string `json:"email"`
+		Password           string `json:"password"`
+		Expires_in_seconds int    `json:"expires_in_seconds"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
@@ -230,11 +245,26 @@ func (cfg *ApiConfig) postLoginHandle(res http.ResponseWriter, req *http.Request
 		healpers.RespondWithError(res, 401, "Unauthorized")
 		return
 	}
+	expiersIn := params.Expires_in_seconds
+	if expiersIn == 0 || expiersIn > 3600 {
+		expiersIn = 3600
+	}
+	sec, err := time.ParseDuration(strconv.Itoa(expiersIn) + "s")
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Parse Time Error")
+		return
+	}
+	token, err := auth.MakeJWT(usr.ID, cfg.JWTSecret, sec)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Make JWT error")
+		return
+	}
 	userJson := healpers.User{
 		Id:         usr.ID,
 		Created_at: usr.CreatedAt,
 		Updated_at: usr.UpdatedAt,
 		Email:      usr.Email,
+		Token:      token,
 	}
 	healpers.RespondWithJSON(res, 200, userJson)
 }
