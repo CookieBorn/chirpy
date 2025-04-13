@@ -40,11 +40,12 @@ type Chirps []struct {
 }
 
 type User struct {
-	Id         uuid.UUID `json:"id"`
-	Created_at time.Time `json:"created_at"`
-	Updated_at time.Time `json:"updated_at"`
-	Email      string    `json:"email"`
-	Token      string    `json:"token"`
+	Id            uuid.UUID `json:"id"`
+	Created_at    time.Time `json:"created_at"`
+	Updated_at    time.Time `json:"updated_at"`
+	Email         string    `json:"email"`
+	Token         string    `json:"token"`
+	Refresh_token string    `json:"refresh_token"`
 }
 
 func StringCleaner(s string) string {
@@ -111,4 +112,18 @@ func DecoderHealper(res http.ResponseWriter, req *http.Request, parameters any) 
 		return parameters
 	}
 	return params
+}
+
+func CreateRefreshToken(usrId uuid.UUID, token string) (database.CreateRefreshTokenParams, error) {
+	emptyParam := database.CreateRefreshTokenParams{}
+	expIn, err := time.ParseDuration("1440h")
+	if err != nil {
+		return emptyParam, err
+	}
+	CreateParam := database.CreateRefreshTokenParams{
+		Token:     token,
+		UserID:    usrId,
+		ExpiresAt: time.Now().Add(expIn),
+	}
+	return CreateParam, err
 }

@@ -36,6 +36,8 @@ func main() {
 	servMux.HandleFunc("GET /api/chirps", apiC.getChirpsHandle)
 	servMux.HandleFunc("GET /api/chirps/", apiC.getChirpHandle)
 	servMux.HandleFunc("POST /api/login", apiC.postLoginHandle)
+	servMux.HandleFunc("POST /api/refresh", apiC.postRefres)
+	servMux.HandleFunc("POST /api/revoke", apiC.postRevoke)
 	http.StripPrefix("app/", servMux)
 	servStruct := http.Server{
 		Addr:    ":8081",
@@ -222,9 +224,8 @@ func (cfg *ApiConfig) getChirpHandle(res http.ResponseWriter, req *http.Request)
 
 func (cfg *ApiConfig) postLoginHandle(res http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email              string `json:"email"`
-		Password           string `json:"password"`
-		Expires_in_seconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
@@ -245,10 +246,7 @@ func (cfg *ApiConfig) postLoginHandle(res http.ResponseWriter, req *http.Request
 		healpers.RespondWithError(res, 401, "Unauthorized")
 		return
 	}
-	expiersIn := params.Expires_in_seconds
-	if expiersIn == 0 || expiersIn > 3600 {
-		expiersIn = 3600
-	}
+	expiersIn := 3600
 	sec, err := time.ParseDuration(strconv.Itoa(expiersIn) + "s")
 	if err != nil {
 		healpers.RespondWithError(res, 400, "Parse Time Error")
@@ -259,12 +257,76 @@ func (cfg *ApiConfig) postLoginHandle(res http.ResponseWriter, req *http.Request
 		healpers.RespondWithError(res, 400, "Make JWT error")
 		return
 	}
+	refToke, err := auth.MakeRefreshToken()
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Make RefreshT error")
+		return
+	}
+	refCretTok, err := healpers.CreateRefreshToken(usr.ID, refToke)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Make RefreshTDB error")
+		return
+	}
+	_, err = cfg.DB.CreateRefreshToken(req.Context(), refCretTok)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Make RefreshTDB error")
+		return
+	}
 	userJson := healpers.User{
-		Id:         usr.ID,
-		Created_at: usr.CreatedAt,
-		Updated_at: usr.UpdatedAt,
-		Email:      usr.Email,
-		Token:      token,
+		Id:            usr.ID,
+		Created_at:    usr.CreatedAt,
+		Updated_at:    usr.UpdatedAt,
+		Email:         usr.Email,
+		Token:         token,
+		Refresh_token: refToke,
 	}
 	healpers.RespondWithJSON(res, 200, userJson)
+}
+
+func (cfg *ApiConfig) postRefres(res http.ResponseWriter, req *http.Request) {
+	type params struct {
+		Token string `json:"token"`
+	}
+	toke, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	usrID, err := cfg.DB.GetUserFromRefreshToken(req.Context(), toke)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	if usrID.RevokedAt.Valid {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	JWTToke, err := auth.MakeJWT(usrID.UserID, cfg.JWTSecret, time.Hour)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	parap := params{
+		Token: JWTToke,
+	}
+	healpers.RespondWithJSON(res, 200, parap)
+}
+
+func (cfg *ApiConfig) postRevoke(res http.ResponseWriter, req *http.Request) {
+	toke, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Header missing Token")
+		return
+	}
+	usrID, err := cfg.DB.GetUserFromRefreshToken(req.Context(), toke)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Token not Valid")
+		return
+	}
+	err = cfg.DB.RevokeRefreshToken(req.Context(), usrID.UserID)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Revoke Token Error")
+		return
+	}
+	res.WriteHeader(204)
 }
