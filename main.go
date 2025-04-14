@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -185,9 +186,23 @@ func (cfg *ApiConfig) createUserHandle(res http.ResponseWriter, req *http.Reques
 }
 
 func (cfg *ApiConfig) getChirpsHandle(res http.ResponseWriter, req *http.Request) {
-	chirps, err := cfg.DB.GetChirpsAll(req.Context())
-	if err != nil {
-		healpers.RespondWithError(res, 400, fmt.Sprintf("Get chirps failed: %v", err))
+	Aid := req.URL.Query().Get("author_id")
+	chirps := []database.Chirp{}
+	var err error
+	if Aid != "" {
+		ID, err := uuid.Parse(Aid)
+		if err != nil {
+			healpers.RespondWithError(res, 400, fmt.Sprintf("Parse error: %v", err))
+		}
+		chirps, err = cfg.DB.GetChirpsAllAuthor(req.Context(), ID)
+		if err != nil {
+			healpers.RespondWithError(res, 400, fmt.Sprintf("Get chirps failed: %v", err))
+		}
+	} else {
+		chirps, err = cfg.DB.GetChirpsAll(req.Context())
+		if err != nil {
+			healpers.RespondWithError(res, 400, fmt.Sprintf("Get chirps failed: %v", err))
+		}
 	}
 	jsonChirps := healpers.Chirps{}
 	for _, chirp := range chirps {
@@ -199,6 +214,10 @@ func (cfg *ApiConfig) getChirpsHandle(res http.ResponseWriter, req *http.Request
 			User_id:    chirp.UserID,
 		}
 		jsonChirps = append(jsonChirps, jsonChirp)
+	}
+	sortP := req.URL.Query().Get("sort")
+	if sortP == "desc" {
+		sort.Slice(jsonChirps, func(i int, j int) bool { return jsonChirps[i].Created_at.Compare(jsonChirps[j].Created_at) > 0 })
 	}
 	healpers.RespondWithJSON(res, 200, jsonChirps)
 }
