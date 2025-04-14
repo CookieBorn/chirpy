@@ -88,3 +88,12 @@ func MakeRefreshToken() (string, error) {
 	randString := hex.EncodeToString(randByte)
 	return randString, nil
 }
+
+func GetAPIKey(headers http.Header) (string, error) {
+	BearerToken := headers.Get("Authorization")
+	splitToken := strings.Split(BearerToken, " ")
+	if len(splitToken) < 2 {
+		return "", errors.New("missing token")
+	}
+	return splitToken[1], nil
+}

@@ -24,6 +24,7 @@ func main() {
 	apiC := ApiConfig{
 		DB:        dbQueries,
 		JWTSecret: healpers.GetEnv("JWT_SECRET"),
+		PolkaKey:  healpers.GetEnv("POLKA_KEY"),
 	}
 	apiC.FileserverHits.Store(0)
 	servMux := http.NewServeMux()
@@ -38,6 +39,9 @@ func main() {
 	servMux.HandleFunc("POST /api/login", apiC.postLoginHandle)
 	servMux.HandleFunc("POST /api/refresh", apiC.postRefres)
 	servMux.HandleFunc("POST /api/revoke", apiC.postRevoke)
+	servMux.HandleFunc("PUT /api/users", apiC.putUserUpdate)
+	servMux.HandleFunc("DELETE /api/chirps/", apiC.deleteChirp)
+	servMux.HandleFunc("POST /api/polka/webhooks", apiC.postPolkaWebhook)
 	http.StripPrefix("app/", servMux)
 	servStruct := http.Server{
 		Addr:    ":8081",
@@ -63,6 +67,7 @@ type ApiConfig struct {
 	FileserverHits atomic.Int32
 	DB             *database.Queries
 	JWTSecret      string
+	PolkaKey       string
 }
 
 func (cfg *ApiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -170,10 +175,11 @@ func (cfg *ApiConfig) createUserHandle(res http.ResponseWriter, req *http.Reques
 	}
 	usr, err := cfg.DB.CreateUser(req.Context(), userParam)
 	UserStruct := healpers.User{
-		Id:         usr.ID,
-		Created_at: usr.CreatedAt,
-		Updated_at: usr.UpdatedAt,
-		Email:      usr.Email,
+		Id:            usr.ID,
+		Created_at:    usr.CreatedAt,
+		Updated_at:    usr.UpdatedAt,
+		Email:         usr.Email,
+		Is_chirpy_red: usr.IsChirpyRed,
 	}
 	healpers.RespondWithJSON(res, 201, UserStruct)
 }
@@ -199,17 +205,14 @@ func (cfg *ApiConfig) getChirpsHandle(res http.ResponseWriter, req *http.Request
 
 func (cfg *ApiConfig) getChirpHandle(res http.ResponseWriter, req *http.Request) {
 	elements := strings.Split(req.RequestURI, "/")
-	fmt.Printf("%v", elements[3])
 	idP, err := uuid.Parse(elements[3])
 	if err != nil {
-		fmt.Printf("Parse error: %v\n", err)
 		healpers.RespondWithError(res, 404, "User not found")
 		return
 	}
 	chirp, err := cfg.DB.GetChirp(req.Context(), idP)
 	if err != nil {
-		fmt.Printf("Get chirp error: %v\n", err)
-		healpers.RespondWithError(res, 404, "User not found")
+		healpers.RespondWithError(res, 404, "Get chirp error")
 		return
 	}
 	jsonChirp := healpers.Chirp{
@@ -279,6 +282,7 @@ func (cfg *ApiConfig) postLoginHandle(res http.ResponseWriter, req *http.Request
 		Email:         usr.Email,
 		Token:         token,
 		Refresh_token: refToke,
+		Is_chirpy_red: usr.IsChirpyRed,
 	}
 	healpers.RespondWithJSON(res, 200, userJson)
 }
@@ -326,6 +330,118 @@ func (cfg *ApiConfig) postRevoke(res http.ResponseWriter, req *http.Request) {
 	err = cfg.DB.RevokeRefreshToken(req.Context(), usrID.UserID)
 	if err != nil {
 		healpers.RespondWithError(res, 400, "Revoke Token Error")
+		return
+	}
+	res.WriteHeader(204)
+}
+
+func (cfg *ApiConfig) putUserUpdate(res http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Decoding Error")
+		return
+	}
+	toke, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	usrID, err := auth.ValidateJWT(toke, cfg.JWTSecret)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	HashPass, err := auth.HashPassword(params.Password)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	UpParam := database.UpdateUserEmailPasswordParams{
+		Email:    params.Email,
+		Password: HashPass,
+		ID:       usrID,
+	}
+	err = cfg.DB.UpdateUserEmailPassword(req.Context(), UpParam)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	type retStruct struct {
+		Email string `json:"email"`
+	}
+	Ret := retStruct{Email: params.Email}
+	healpers.RespondWithJSON(res, 200, Ret)
+}
+
+func (cfg *ApiConfig) deleteChirp(res http.ResponseWriter, req *http.Request) {
+	toke, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	usrID, err := auth.ValidateJWT(toke, cfg.JWTSecret)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "Unauthorized")
+		return
+	}
+	elements := strings.Split(req.RequestURI, "/")
+	idP, err := uuid.Parse(elements[3])
+	if err != nil {
+		healpers.RespondWithError(res, 404, "User not found")
+		return
+	}
+	chirp, err := cfg.DB.GetChirp(req.Context(), idP)
+	if err != nil {
+		healpers.RespondWithError(res, 404, "Get chirp error")
+		return
+	}
+	if chirp.UserID != usrID {
+		healpers.RespondWithError(res, 403, "User not creator")
+		return
+	}
+	err = cfg.DB.DeleteChirp(req.Context(), chirp.ID)
+	if err != nil {
+		healpers.RespondWithError(res, 404, "Delete chirp error")
+		return
+	}
+	res.WriteHeader(204)
+}
+
+func (cfg *ApiConfig) postPolkaWebhook(res http.ResponseWriter, req *http.Request) {
+	api, err := auth.GetAPIKey(req.Header)
+	if err != nil {
+		healpers.RespondWithError(res, 401, "API Error")
+		return
+	}
+	if api != cfg.PolkaKey {
+		healpers.RespondWithError(res, 401, "Unautherized")
+		return
+	}
+	decoder := json.NewDecoder(req.Body)
+	params := healpers.PolkaWebHook{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Decoding Error")
+		return
+	}
+	if params.Event != "user.upgraded" {
+		healpers.RespondWithError(res, 204, "Decoding Error")
+		return
+	}
+	id, err := uuid.Parse(params.Data.UserID)
+	if err != nil {
+		healpers.RespondWithError(res, 400, "Parse Error")
+		return
+	}
+	err = cfg.DB.SetUserToRed(req.Context(), id)
+	if err != nil {
+		healpers.RespondWithError(res, 404, "User Not Found")
 		return
 	}
 	res.WriteHeader(204)

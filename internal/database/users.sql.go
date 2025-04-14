@@ -21,7 +21,7 @@ VALUES (
     $1,
     $2
 )
-RETURNING id, created_at, updated_at, email
+RETURNING id, created_at, updated_at, email, is_chirpy_red
 `
 
 type CreateUserParams struct {
@@ -30,10 +30,11 @@ type CreateUserParams struct {
 }
 
 type CreateUserRow struct {
-	ID        uuid.UUID
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Email     string
+	ID          uuid.UUID
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Email       string
+	IsChirpyRed bool
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error) {
@@ -44,12 +45,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Email,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
 
 const getUserEmail = `-- name: GetUserEmail :one
-SELECT id, created_at, updated_at, email, password from users
+SELECT id, created_at, updated_at, email, password, is_chirpy_red from users
 where email=$1
 `
 
@@ -62,8 +64,21 @@ func (q *Queries) GetUserEmail(ctx context.Context, email string) (User, error) 
 		&i.UpdatedAt,
 		&i.Email,
 		&i.Password,
+		&i.IsChirpyRed,
 	)
 	return i, err
+}
+
+const getUserEmailFromID = `-- name: GetUserEmailFromID :one
+SELECT email from users
+where id=$1
+`
+
+func (q *Queries) GetUserEmailFromID(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRowContext(ctx, getUserEmailFromID, id)
+	var email string
+	err := row.Scan(&email)
+	return email, err
 }
 
 const reset = `-- name: Reset :exec
@@ -72,5 +87,33 @@ DELETE from users
 
 func (q *Queries) Reset(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, reset)
+	return err
+}
+
+const setUserToRed = `-- name: SetUserToRed :exec
+UPDATE users
+set is_chirpy_red = true
+Where id=$1
+`
+
+func (q *Queries) SetUserToRed(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, setUserToRed, id)
+	return err
+}
+
+const updateUserEmailPassword = `-- name: UpdateUserEmailPassword :exec
+UPDATE users
+set email = $1, updated_at = NOW(), password = $2
+Where id=$3
+`
+
+type UpdateUserEmailPasswordParams struct {
+	Email    string
+	Password string
+	ID       uuid.UUID
+}
+
+func (q *Queries) UpdateUserEmailPassword(ctx context.Context, arg UpdateUserEmailPasswordParams) error {
+	_, err := q.db.ExecContext(ctx, updateUserEmailPassword, arg.Email, arg.Password, arg.ID)
 	return err
 }

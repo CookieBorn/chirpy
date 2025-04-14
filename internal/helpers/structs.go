@@ -46,6 +46,14 @@ type User struct {
 	Email         string    `json:"email"`
 	Token         string    `json:"token"`
 	Refresh_token string    `json:"refresh_token"`
+	Is_chirpy_red bool      `json:"is_chirpy_red"`
+}
+
+type PolkaWebHook struct {
+	Event string `json:"event"`
+	Data  struct {
+		UserID string `json:"user_id"`
+	} `json:"data"`
 }
 
 func StringCleaner(s string) string {
@@ -102,16 +110,13 @@ func RespondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Write(tru)
 }
 
-func DecoderHealper(res http.ResponseWriter, req *http.Request, parameters any) any {
+func DecoderHealper(res http.ResponseWriter, req *http.Request, params any) (any, error) {
 	decoder := json.NewDecoder(req.Body)
-	params := parameters
 	err := decoder.Decode(&params)
 	if err != nil {
-		fmt.Printf("Decoding error: %v", err)
-		res.WriteHeader(400)
-		return parameters
+		return params, err
 	}
-	return params
+	return params, nil
 }
 
 func CreateRefreshToken(usrId uuid.UUID, token string) (database.CreateRefreshTokenParams, error) {
